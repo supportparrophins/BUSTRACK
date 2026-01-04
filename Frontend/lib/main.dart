@@ -69,21 +69,70 @@ void onStart(ServiceInstance service) async {
   StreamSubscription<Position>? positionStream;
   Timer? sendTimer;
   bool isConnected = false;
+  bool isAuthenticated = false;
+  bool routeLockFailed = false;
 
   socket.onConnect((_) {
     isConnected = true;
     debugPrint('✅ Socket connected successfully');
+    
+    // Authenticate driver and lock route
+    debugPrint('🔐 Authenticating driver for route ${driver.routeId}...');
+    socket.emit('authenticate_driver', {
+      'bus_id': driver.busId,
+      'route_id': driver.routeId,
+      'vehicle_number': driver.vehicleNumber,
+    });
+    
     if (service is AndroidServiceInstance) {
       service.setForegroundNotificationInfo(
         title: "Bus Tracker Active",
-        content: "Connected - ${driver.vehicleNumber ?? 'Tracking'}",
+        content: "Authenticating - ${driver.vehicleNumber ?? 'Tracking'}",
       );
     }
   });
 
   socket.onDisconnect((_) {
     isConnected = false;
+    isAuthenticated = false;
     debugPrint('❌ Socket disconnected');
+  });
+
+  // Route lock success
+  socket.on('route_lock_success', (data) {
+    isAuthenticated = true;
+    debugPrint('✅ Route locked successfully: $data');
+    if (service is AndroidServiceInstance) {
+      service.setForegroundNotificationInfo(
+        title: "Bus Tracker Active",
+        content: "Tracking - ${driver.vehicleNumber ?? 'Active'}",
+      );
+    }
+  });
+
+  // Route already locked by another driver
+  socket.on('route_locked', (data) {
+    routeLockFailed = true;
+    isAuthenticated = false;
+    debugPrint('❌ Route lock failed: $data');
+    
+    if (service is AndroidServiceInstance) {
+      service.setForegroundNotificationInfo(
+        title: "Route Already Tracked",
+        content: data['message'] ?? "Another driver is tracking this route",
+      );
+    }
+    
+    // Stop the service after showing error
+    Future.delayed(const Duration(seconds: 3), () {
+      service.stopSelf();
+    });
+  });
+
+  // Route not locked (trying to send location without authentication)
+  socket.on('route_not_locked', (data) {
+    debugPrint('⚠️ Route not locked: $data');
+    isAuthenticated = false;
   });
 
   // Listen for trip_ended confirmation
@@ -140,6 +189,12 @@ void onStart(ServiceInstance service) async {
   sendTimer = Timer.periodic(
       Duration(seconds: AppConstants.locationUpdateInterval), (timer) async {
     try {
+      // Don't send if route lock failed or not authenticated
+      if (routeLockFailed || !isAuthenticated) {
+        debugPrint('⚠️ Skipping location send - authenticated: $isAuthenticated, lockFailed: $routeLockFailed');
+        return;
+      }
+      
       if (lastPosition == null) {
         try {
           lastPosition = await Geolocator.getCurrentPosition(
@@ -150,7 +205,7 @@ void onStart(ServiceInstance service) async {
         }
       }
 
-      if (lastPosition != null && isConnected) {
+      if (lastPosition != null && isConnected && isAuthenticated) {
         // Convert speed from m/s to km/h
         final speedKmh =
             (lastPosition!.speed * 3.6).clamp(0.0, double.infinity);

@@ -1,10 +1,69 @@
 const LiveLocation = require("../models/livelocation");
 const TripHistory = require("../models/triphistory");
 
+// Track locked routes: { route_id: { socket_id, bus_id, locked_at } }
+const lockedRoutes = new Map();
+
 module.exports = (io) => {
 
   io.on("connection", (socket) => {
     console.log("Client connected:", socket.id);
+    
+    // Store driver info on socket for cleanup later
+    socket.driverData = null;
+
+    // Driver authenticates and locks route
+    socket.on("authenticate_driver", async (data) => {
+      const { bus_id, route_id, vehicle_number } = data;
+      console.log(`🔐 Driver authentication attempt - Bus: ${bus_id}, Route: ${route_id}, Socket: ${socket.id}`);
+
+      try {
+        // Check if route is already locked by another driver
+        if (lockedRoutes.has(route_id)) {
+          const lockInfo = lockedRoutes.get(route_id);
+          
+          // Check if it's the same socket trying to reconnect
+          if (lockInfo.socket_id !== socket.id) {
+            console.log(`❌ Route ${route_id} is already locked by socket ${lockInfo.socket_id}`);
+            socket.emit("route_locked", {
+              success: false,
+              message: `This route is already being tracked by another driver (${lockInfo.vehicle_number || 'Unknown'})`,
+              locked_by: lockInfo.bus_id,
+              locked_at: lockInfo.locked_at
+            });
+            return;
+          }
+        }
+
+        // Lock the route
+        lockedRoutes.set(route_id, {
+          socket_id: socket.id,
+          bus_id: bus_id,
+          vehicle_number: vehicle_number,
+          locked_at: new Date()
+        });
+
+        // Store driver data on socket for cleanup
+        socket.driverData = { bus_id, route_id, vehicle_number };
+
+        console.log(`✅ Route ${route_id} locked by driver ${bus_id} (${vehicle_number}) - Socket: ${socket.id}`);
+        console.log(`🔒 Currently locked routes:`, Array.from(lockedRoutes.keys()));
+
+        // Send success response
+        socket.emit("route_lock_success", {
+          success: true,
+          message: "Route locked successfully. You can now start tracking.",
+          route_id: route_id,
+          bus_id: bus_id
+        });
+      } catch (error) {
+        console.error("Error in authenticate_driver:", error);
+        socket.emit("route_locked", {
+          success: false,
+          message: "Failed to lock route. Please try again."
+        });
+      }
+    });
 
     // Student joins route
     socket.on("join_route", async (data) => {
@@ -38,6 +97,16 @@ module.exports = (io) => {
     socket.on("bus_location", async (data) => {
       const { bus_id, route_id, lat, lng, speed } = data;
       console.log("Received bus location:", { bus_id, route_id, lat, lng, speed });
+
+      // Verify route is locked by this driver
+      if (!lockedRoutes.has(route_id) || lockedRoutes.get(route_id).socket_id !== socket.id) {
+        console.log(`⚠️ Unauthorized location update attempt for route ${route_id} by socket ${socket.id}`);
+        socket.emit("route_not_locked", {
+          success: false,
+          message: "You must authenticate first before sending location updates."
+        });
+        return;
+      }
 
       try {
         let existingLocation = await LiveLocation.findOne({ bus_id });
@@ -148,6 +217,13 @@ module.exports = (io) => {
         
         // Notify clients that trip has ended
         if (currentTrip) {
+          // Unlock the route
+          if (lockedRoutes.has(currentTrip.route_id)) {
+            lockedRoutes.delete(currentTrip.route_id);
+            console.log(`🔓 Route ${currentTrip.route_id} unlocked after trip end`);
+            console.log(`🔒 Currently locked routes:`, Array.from(lockedRoutes.keys()));
+          }
+
           io.to(`route_${currentTrip.route_id}`).emit("trip_ended", {
             bus_id: bus_id
           });
@@ -159,6 +235,37 @@ module.exports = (io) => {
 
     socket.on("disconnect", () => {
       console.log("Client disconnected:", socket.id);
+      
+      // Unlock route if this was a driver
+      if (socket.driverData) {
+        const { route_id, bus_id, vehicle_number } = socket.driverData;
+        if (lockedRoutes.has(route_id) && lockedRoutes.get(route_id).socket_id === socket.id) {
+          lockedRoutes.delete(route_id);
+          console.log(`🔓 Route ${route_id} unlocked due to driver ${bus_id} (${vehicle_number}) disconnect`);
+          console.log(`🔒 Currently locked routes:`, Array.from(lockedRoutes.keys()));
+          
+          // Notify students that tracking has stopped
+          io.to(`route_${route_id}`).emit("tracking_stopped", {
+            route_id: route_id,
+            message: "Driver has disconnected. Tracking stopped."
+          });
+        }
+      }
     });
   });
+};
+
+// Export function to get locked routes for API endpoint
+module.exports.getLockedRoutes = () => {
+  const routes = [];
+  lockedRoutes.forEach((value, key) => {
+    routes.push({
+      route_id: key,
+      bus_id: value.bus_id,
+      vehicle_number: value.vehicle_number,
+      socket_id: value.socket_id,
+      locked_at: value.locked_at
+    });
+  });
+  return routes;
 };

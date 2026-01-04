@@ -27,12 +27,62 @@ class _HomeScreenState extends State<HomeScreen> {
   double _currentHeading = 0.0;
   bool _followLocation = true; // Auto-follow user location
   bool _mapReady = false;
+  bool _hasShownRouteLockError = false;
 
   @override
   void initState() {
     super.initState();
     _loadData();
     _startLocationUpdates();
+    _checkRouteLockStatus();
+  }
+
+  // Check if route lock failed and show error
+  Future<void> _checkRouteLockStatus() async {
+    await Future.delayed(const Duration(seconds: 5)); // Give time for authentication
+    
+    final service = FlutterBackgroundService();
+    if (!await service.isRunning() && mounted && !_hasShownRouteLockError) {
+      _hasShownRouteLockError = true;
+      _showRouteLockErrorDialog();
+    }
+  }
+
+  void _showRouteLockErrorDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.lock, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Route Already Tracked'),
+          ],
+        ),
+        content: const Text(
+          'This route is already being tracked by another driver. Only one driver can track a route at a time.\n\nPlease contact your administrator if you believe this is an error.',
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () async {
+              await AuthService.logout();
+              if (mounted) {
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  (route) => false,
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Back to Login'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadData() async {
