@@ -134,4 +134,30 @@ class ApiService {
       };
     }
   }
+
+  // Get locked routes from tracking backend
+  static Future<List<int>> getLockedRoutes() async {
+    try {
+      // Use socket URL for tracking backend
+      final socketUrl = AppConstants.socketUrl;
+      final response = await http.get(
+        Uri.parse('$socketUrl/locked-routes'),
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['locked_routes'] != null) {
+          List<int> lockedRouteIds = [];
+          for (var route in data['locked_routes']) {
+            lockedRouteIds.add(route['route_id'] as int);
+          }
+          return lockedRouteIds;
+        }
+      }
+      return [];
+    } catch (e) {
+      debugPrint('Error fetching locked routes: $e');
+      return []; // Return empty list on error
+    }
+  }
 }

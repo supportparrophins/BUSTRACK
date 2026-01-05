@@ -116,15 +116,17 @@ void onStart(ServiceInstance service) async {
     isAuthenticated = false;
     debugPrint('❌ Route lock failed: $data');
     
+    String errorMessage = data['message'] ?? "Another driver is tracking this route";
+    
     if (service is AndroidServiceInstance) {
       service.setForegroundNotificationInfo(
-        title: "Route Already Tracked",
-        content: data['message'] ?? "Another driver is tracking this route",
+        title: "⚠️ Route Already Tracked",
+        content: errorMessage,
       );
     }
     
     // Stop the service after showing error
-    Future.delayed(const Duration(seconds: 3), () {
+    Future.delayed(const Duration(seconds: 2), () {
       service.stopSelf();
     });
   });

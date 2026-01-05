@@ -11,7 +11,9 @@ import 'profile_screen.dart';
 import 'login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final Function(String)? onRouteLockFailed;
+  
+  const HomeScreen({super.key, this.onRouteLockFailed});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -39,32 +41,65 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Check if route lock failed and show error
   Future<void> _checkRouteLockStatus() async {
-    await Future.delayed(const Duration(seconds: 5)); // Give time for authentication
+    await Future.delayed(const Duration(seconds: 3)); // Give time for authentication
     
     final service = FlutterBackgroundService();
     if (!await service.isRunning() && mounted && !_hasShownRouteLockError) {
       _hasShownRouteLockError = true;
-      _showRouteLockErrorDialog();
+      
+      // Try to get the error message from shared preferences
+      String errorMessage = 'This route is already being tracked by another driver.';
+      
+      // Show error dialog
+      await _showRouteLockErrorDialog(errorMessage);
     }
   }
 
-  void _showRouteLockErrorDialog() {
-    showDialog(
+  Future<void> _showRouteLockErrorDialog(String message) async {
+    await showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: const Row(
           children: [
-            Icon(Icons.lock, color: Colors.red),
-            SizedBox(width: 8),
-            Text('Route Already Tracked'),
+            Icon(Icons.lock, color: Colors.red, size: 28),
+            SizedBox(width: 12),
+            Expanded(child: Text('Route Already Tracked')),
           ],
         ),
-        content: const Text(
-          'This route is already being tracked by another driver. Only one driver can track a route at a time.\n\nPlease contact your administrator if you believe this is an error.',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              message,
+              style: const TextStyle(fontSize: 16),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.orange.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Only one driver can track a route at a time. Please try selecting a different route.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
         actions: [
-          ElevatedButton(
+          ElevatedButton.icon(
             onPressed: () async {
               await AuthService.logout();
               if (mounted) {
@@ -75,10 +110,12 @@ class _HomeScreenState extends State<HomeScreen> {
               }
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: Colors.blue.shade700,
               foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             ),
-            child: const Text('Back to Login'),
+            icon: const Icon(Icons.arrow_back),
+            label: const Text('Choose Different Route'),
           ),
         ],
       ),

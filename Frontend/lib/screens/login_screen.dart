@@ -18,6 +18,7 @@ class _LoginScreenState extends State<LoginScreen> {
   RouteModel? _selectedRoute;
   bool _isLoading = true;
   bool _isSubmitting = false;
+  List<int> _lockedRouteIds = []; // Track locked routes
 
   @override
   void initState() {
@@ -29,11 +30,28 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
 
     try {
+      // Fetch locked routes first
+      final lockedRoutes = await ApiService.getLockedRoutes();
+      
+      // Then fetch all routes
       final result = await ApiService.getRoutes();
 
       if (result['success']) {
+        List<RouteModel> routes = result['routes'] as List<RouteModel>;
+        
+        // Mark routes as locked
+        routes = routes.map((route) {
+          return RouteModel(
+            routeId: route.routeId,
+            routeName: route.routeName,
+            vehicleNumber: route.vehicleNumber,
+            isLocked: lockedRoutes.contains(route.routeId),
+          );
+        }).toList();
+        
         setState(() {
-          _routes = result['routes'] as List<RouteModel>;
+          _routes = routes;
+          _lockedRouteIds = lockedRoutes;
           _isLoading = false;
         });
       } else {
@@ -103,7 +121,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
         if (mounted) {
           Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const HomeScreen()),
+            MaterialPageRoute(
+              builder: (_) => HomeScreen(
+                onRouteLockFailed: _handleRouteLockError,
+              ),
+            ),
           );
         }
       } else {
@@ -116,9 +138,150 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _showRouteLockedDialog(RouteModel route) async {
+    return showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.lock, color: Colors.red.shade700, size: 28),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Route Already Tracked',
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Route "${route.routeName}" is currently being tracked by another driver.',
+              style: const TextStyle(fontSize: 16),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.orange.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Only one driver can track a route at a time. Please select a different route.',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              // Refresh routes to update lock status
+              await _loadRoutes();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue.shade700,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            ),
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Refresh Routes'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
+    );
+  }
+
+  Future<void> _handleRouteLockError(String message) async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.lock, color: Colors.red, size: 28),
+            SizedBox(width: 12),
+            Text('Route Already Tracked'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              message,
+              style: const TextStyle(fontSize: 16),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.orange.shade700),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Only one driver can track a route at a time.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () async {
+              await AuthService.logout();
+              if (mounted) {
+                Navigator.of(context).pop();
+                setState(() {
+                  _selectedRoute = null;
+                  _isSubmitting = false;
+                });
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
+            child: const Text('Try Different Route'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -281,19 +444,48 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ),
                                 ),
                                 items: _routes.map((route) {
+                                  final isLocked = route.isLocked;
                                   return DropdownMenuItem<RouteModel>(
                                     value: route,
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 16),
-                                      child: Text(route.displayText),
+                                      child: Row(
+                                        children: [
+                                          if (isLocked)
+                                            Icon(
+                                              Icons.lock,
+                                              size: 18,
+                                              color: Colors.red.shade400,
+                                            ),
+                                          if (isLocked) const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              route.displayText,
+                                              style: TextStyle(
+                                                color: isLocked
+                                                    ? Colors.grey.shade500
+                                                    : Colors.black,
+                                                fontWeight: isLocked
+                                                    ? FontWeight.normal
+                                                    : FontWeight.w500,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   );
                                 }).toList(),
                                 onChanged: (RouteModel? value) {
-                                  setState(() {
-                                    _selectedRoute = value;
-                                  });
+                                  // If locked route is selected, show instant popup
+                                  if (value != null && value.isLocked) {
+                                    _showRouteLockedDialog(value);
+                                  } else {
+                                    setState(() {
+                                      _selectedRoute = value;
+                                    });
+                                  }
                                 },
                                 borderRadius: BorderRadius.circular(12),
                               ),
